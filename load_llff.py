@@ -15,7 +15,7 @@ def _minify(basedir, factors=[], resolutions=[]):
     # 判断本地是否已经存有下采样factors或者对应分辨率的图像，如果没有需要重新加载
     for r in factors:
         imgdir = os.path.join(basedir, 'images_{}'.format(r))
-        # ; 如果不存在，那么需要加载，也就是重新生成
+        # 如果不存在，那么需要加载，也就是重新生成
         if not os.path.exists(imgdir):
             needtoload = True
     # 这个分值就是使用分辨率来降采样图片
@@ -26,10 +26,11 @@ def _minify(basedir, factors=[], resolutions=[]):
     if not needtoload:
         return
 
+    
+    #; 运行到这里，说明没有降采样的图片，那么需要自己生成降采样的图片
     from shutil import copy
     from subprocess import check_output  # 执行外部命令
 
-    # ; 运行到这里，说明没有降采样的图片，那么需要自己生成降采样的图片
     imgdir = os.path.join(basedir, 'images')   # 原始数据集的图片
     imgs = [os.path.join(imgdir, f) for f in sorted(os.listdir(imgdir))]
     # list N个图像数据路径
@@ -40,7 +41,7 @@ def _minify(basedir, factors=[], resolutions=[]):
     imgdir_orig = imgdir
 
     # '/home/cc/nerf-learn/nerf-pytorch_Comments'
-    wd = os.getcwd()  # 获取代码路径
+    wd = os.getcwd()  # 获取当前代码所在的路径
 
     for r in factors + resolutions:
         if isinstance(r, int):  # 如果是整型，那么就是缩放几倍
@@ -56,8 +57,8 @@ def _minify(basedir, factors=[], resolutions=[]):
         print('Minifying', r, basedir)
 
         os.makedirs(imgdir)  # 新建数据路径 images_8
-        # ; check_output是执行外部命令：https://python3-cookbook.readthedocs.io/zh_CN/latest/c13/p06_executing_external_command_and_get_its_output.html
-        # ; 下面的操作就是把原始数据集文件夹下的图片，复制到新建的images_8文件夹下
+        # check_output是执行外部命令：https://python3-cookbook.readthedocs.io/zh_CN/latest/c13/p06_executing_external_command_and_get_its_output.html
+        # 下面的操作就是把原始数据集文件夹下的图片，复制到新建的images_8文件夹下
         check_output('cp {}/* {}'.format(imgdir_orig, imgdir), shell=True)
 
         ext = imgs[0].split('.')[-1]  # 取出第一张图片名称的格式，比如JPG
@@ -65,9 +66,9 @@ def _minify(basedir, factors=[], resolutions=[]):
                         '-format', 'png', '*.{}'.format(ext)])
         print(args)
         os.chdir(imgdir)  # 修改工作路径，进入images_8文件夹下
-        # ; 注意这里还是调用命令行执行命令，命令是mogrify，这个并不是ubuntu标准命令，而是另外一个包中带有的，
-        # ; 见：https://askubuntu.com/questions/1164/how-to-easily-resize-images-via-command-line
-        # ; 可以简单的认为，这个包可以直接resize图像，而不用使用python读取出来图像resize之后再写入，更加方便
+        # 注意这里还是调用命令行执行命令，命令是mogrify，这个并不是ubuntu标准命令，而是另外一个包中带有的，
+        # 见：https://askubuntu.com/questions/1164/how-to-easily-resize-images-via-command-line
+        # 可以简单的认为，这个包可以直接resize图像，而不用使用python读取出来图像resize之后再写入，更加方便
         check_output(args, shell=True)
         os.chdir(wd)  # 再回到当前工程的根目录下
 
@@ -81,14 +82,23 @@ def _minify(basedir, factors=[], resolutions=[]):
 def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     """_summary_
         加载图像数据集，调用时只传入前两个参数，其他都是默认
+    Args:
+        basedir (string): 数据集路径
+        factor (int, optional): 图像缩放因子. Defaults to None.
+        width (_type_, optional): _description_. Defaults to None.
+        height (_type_, optional): _description_. Defaults to None.
+        load_imgs (bool, optional): _description_. Defaults to True.
+
+    Returns:
+        _type_: _description_
     """
-    # ; 注意.npy是numpy专用的二进制文件存储格式
+    # Step 1. 读取位姿和场景深度范围
     # [imagesN,17] [20,17]存放的位姿和bds
-    poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
+    poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))   # .npy是numpy专用的二进制文件存储格式
     # ; 注意这里位姿为什么是3x5, 因为3x3是旋转，第4列是平移，第5列分别是h, w, f
-    # [3,5,imagesN][3,5,20]
+    # (20, 15) -> (20, 3, 5) -> (3, 5, 20)
     poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1, 2, 0])
-    bds = poses_arr[:, -2:].transpose([1, 0])  # bounds 深度范围[2,imagesN] [2,20]
+    bds = poses_arr[:, -2:].transpose([1, 0])  # bounds 深度范围, (20, 2) -> (2, 20)
 
     # ; 下面的操作首先是一个列表生成，先使用listdir把文件夹下的所有文件列出来，然后sorted对文件名排序，
     # ; 然后if条件生成，得到图片名称的路径。最后一步[0]取出第一张图像的文件名
@@ -98,11 +108,11 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
 
     sfx = ''
 
-    # 如果有下采样相关参数输入，则对图像进行下采样
+    # Step 2. 如果要对图像进行缩小，则判断是否存在缩小的图像，不存在则进行创建
     if factor is not None:
-        sfx = '_{}'.format(factor)
+        sfx = '_{}'.format(factor)  # _8
+        # 这里是判断要缩小后的图片数据集中是否,存在如果不存在就在这里用代码手动缩放并存储起来，方便后面读取
         _minify(basedir, factors=[factor])
-        #! 疑问：这句是啥意思？自己赋值自己有啥毛病？
         factor = factor
     elif height is not None:
         factor = sh[0] / float(height)
@@ -117,8 +127,8 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     else:
         factor = 1
 
-    # 判断是否存在采样后的数据路径
-    imgdir = os.path.join(basedir, 'images' + sfx)
+    # 判断是否存在采样后的数据路径，是为了验证前面一步缩小图像是否正确执行了
+    imgdir = os.path.join(basedir, 'images' + sfx)  # images_8
     if not os.path.exists(imgdir):
         print(imgdir, 'does not exist, returning')
         return
@@ -130,34 +140,38 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
         print('Mismatch between imgs {} and poses {} !!!!'.format(
             len(imgfiles), poses.shape[-1]))
         return
-    # 获取图像shape
-    # [h/factor,w/factor,c]  [378,504,3]
+    
+    # Step 3. 根据缩放倍数更新相机的h,w,f（内参）
+    # 图像大小，[h/factor,w/factor,c]  [378,504,3]
     sh = imageio.imread(imgfiles[0]).shape
-    poses[:2, 4, :] = np.array(sh[:2]).reshape(
-        [2, 1])  # 3x5第五列存放的是h,w,f,使用下采样图像需要更新h,w
+    # 第5列的前2行存储图像h,w，这里就是缩放后的378, 504
+    poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1])  
+    # 第5列的第3行存储相机的焦距，图像缩小了，则焦距对应缩小
     poses[2, 4, :] = poses[2, 4, :] * 1./factor  # 更新f=f_ori/factor
 
-    # ; 注意这里默认load_imgs参数是true，所以继续往下走
+    # 注意这里默认load_imgs参数是true，所以继续往下走
     if not load_imgs:
         return poses, bds
 
     def imread(f):
         if f.endswith('png'):
-            return imageio.imread(f, ignoregamma=True)
+            # 原始语句运行报错解决：https://zhuanlan.zhihu.com/p/630948914
+            # return imageio.imread(f, ignoregamma=True)
+            return imageio.imread(f, format="PNG-PIL", ignoregamma=True)
         else:
             return imageio.imread(f)
 
-    #! 疑问：这里赋值两遍有啥用？
-    #! 疑问：这里切片好像就等价于全部取出来？那为什么要写成[..., :3]这种形式呢？
+    # [(378, 504, 3), ...], 也就是每一张图像的数据
     imgs = imgs = [imread(f)[..., :3]/255. for f in imgfiles]
-    # ; np.stack，沿着最后一个轴对数据进行stack,从而数据就扩展出一个维度
+    # (378, 504, 3, 20) 沿着最后一个轴对数据进行stack,从而数据就扩展出一个维度
     imgs = np.stack(imgs, -1)  # [h/factor,w/factor,c,imagesN]
-
+    # 打印结果： (378, 504, 3, 20)  [378, 504, 407.565]就是 h,w,f
     print('Loaded image data', imgs.shape, poses[:, -1, 0])
     return poses, bds, imgs
 
 
 def normalize(x):
+    """ 对传入的numpy数组进行归一化"""
     return x / np.linalg.norm(x)  # np.linalg是线性代数模块
 
 
@@ -166,6 +180,7 @@ def viewmatrix(z, up, pos):
     vec1_avg = up  # y轴在world系下表示，没有归一化
     vec0 = normalize(np.cross(vec1_avg, vec2))  # y*z,得到x轴，再归一化。xyzxyzxyz顺序是右手系
     vec1 = normalize(np.cross(vec2, vec0))  # z*x，得到y轴，再归一化
+    # [(3,), ...], 沿着维度1拼接，就是扩展出一个维度，变成 (3, 4)
     m = np.stack([vec0, vec1, vec2, pos], 1)
     return m
 
@@ -176,14 +191,26 @@ def ptstocam(pts, c2w):
 
 
 def poses_avg(poses):
-    # 先把位姿中最后一列存储的hwf，也就是高、宽、焦距取出来
+    """对所有相机的位姿求均值，以重新定义世界坐标系
+
+    Args:
+        poses (_type_): (20, 3, 5)，（相机个数，3x3旋转，3x1平移，3x1 hwf）
+
+    Returns:
+        _type_: (3, 5) 所有相机位姿的均值
+    """
+    # (3, 1) 先把位姿中最后一列存储的hwf，也就是高、宽、焦距取出来
     hwf = poses[0, :3, -1:]
-    # 把位姿中第4列，也就是平移取出来，求平均，得到平移的均值
+    # (3,) 把位姿中第4列，也就是平移取出来，求平均，得到平移的均值
     center = poses[:, :3, 3].mean(0)
-    vec2 = normalize(poses[:, :3, 2].sum(0)) # 对旋转向量的最后一列求和，再归一化
+    # (3,) poses[:, :3, 2]: (20, 3)  .sum(0): (3,)    
+    vec2 = normalize(poses[:, :3, 2].sum(0)) # 对所有相机的旋转向量的最后一列求和，再归一化
+    # (3,)
     up = poses[:, :3, 1].sum(0)  # 对旋转向量的第2列求和
+    # [(3, 4), (3, 1)] 沿着维度1拼接 -> (3, 5)
     c2w = np.concatenate([viewmatrix(vec2, up, center), hwf], 1)
 
+    # (3, 5) 最终返回的结果就是所有相机位姿的均值
     return c2w
 
 
@@ -199,27 +226,34 @@ def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
         render_poses.append(np.concatenate([viewmatrix(z, up, c), hwf], 1))
     return render_poses
 
-
-# 计算poses 的均值，将所有pose做个该均值逆转换，简单来说重新定义了世界坐标系，
-# 原点大致在被测物中心，然后world系的姿态也在所有相机姿态的平均值上，这样保证所有姿态都不有很大或者很小的值
 def recenter_poses(poses):
+    """计算poses 的均值，将所有pose做个该均值逆转换，简单来说重新定义了世界坐标系，
+       原点大致在被测物中心，然后world系的姿态也在所有相机姿态的平均值上，这样保证
+       所有姿态都不有很大或者很小的值
+
+    Args:
+        poses (_type_): (20, 3, 5) 
+    Returns:
+        _type_: (20, 3, 5) worldb系被重新定义到场景中心
+    """
     #; 注意这里+0就是为了新生成一个对象，否则就是引用，仍然是原来的结果
     poses_ = poses + 0
     bottom = np.reshape([0, 0, 0, 1.], [1, 4])
-    c2w = poses_avg(poses) # 结果是(3, 5)，就是poses中所有位姿的平均，最后一列仍然是hwf
-    # 最下面加一行0001，变成(4,4)齐次坐标形式，这里最后用的是-2，写成0更好理解
+    # (3, 5)，就是poses中所有位姿的平均，最后一列仍然是hwf
+    c2w = poses_avg(poses) 
+    # (4, 4) 最下面加一行0001，变成齐次坐标形式，这里最后用的是-2，写成0更好理解
     c2w = np.concatenate([c2w[:3, :4], bottom], -2)  
-    bottom = np.tile(np.reshape(bottom, [1, 1, 4]), [poses.shape[0], 1, 1]) # np.tile把数组沿着各个方向复制
+    # (20, 1, 4) np.tile把数组沿着各个方向复制
+    bottom = np.tile(np.reshape(bottom, [1, 1, 4]), [poses.shape[0], 1, 1]) 
+    # [(20, 3, 4), (20, 1, 4)] -> (20, 4, 4)
     poses = np.concatenate([poses[:, :3, :4], bottom], -2)  # 把原来所有的位姿也都改成齐次坐标形式
 
-    #; (4,4) * (20, 4, 4)，这里应该是有广播操作？
+    #; 矩阵乘法: (4, 4) @ (20, 4, 4)，注意这里有广播操作，首先会把(4, 4)复制变成(20, 4, 4)，再在后面两个维度进行矩阵乘法
+    # (20, 4, 4)，注意经过这个操作之后，相机位姿的参考坐标系就被重新定义到了场景中心
     poses = np.linalg.inv(c2w) @ poses  # 4x4矩阵相乘
     poses_[:, :3, :4] = poses[:, :3, :4]  # 取3x4，也就是把其次坐标去掉，只拿有用的部分
     poses = poses_
     return poses
-
-
-#####################
 
 
 def spherify_poses(poses, bds):
@@ -288,22 +322,38 @@ def spherify_poses(poses, bds):
 
 
 def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False):
+    """ 读取 llff 格式的数据，返回数据集中的所有图像、图像的相机位姿
 
+    Args:
+        basedir (string): 数据集路径
+        factor (int, optional): 图像缩放因子，用于降低计算量. Defaults to 8.
+        recenter (bool, optional): 是否对位姿进行重新计算，让world系位于场景中心. Defaults to True.
+        bd_factor (float, optional): 每个相机观察场景深度范围的缩放阈值. Defaults to .75.
+        spherify (bool, optional): 是否是360度环视场景. Defaults to False.
+        path_zflat (bool, optional):？？？. Defaults to False.
+
+    Returns:
+        _type_: _description_
+    """
+    # Step 1. 读取数据集中的原始图像、每个图像对应的相机位姿、每个图像对应的场景的深度范围
     # 原始数据读取，位姿:poses，采样far,near信息即深度值范围:bds，rgb图像:imgs
-    # poses[3,5,N] bds [2,N] imgs[h,w,c,N]
-    # factor=8 downsamples original imgs by 8x 图像下采样
+    # (3, 5, 20)  (2, 20)  (378, 504, 3, 20)
     poses, bds, imgs = _load_data(basedir, factor=factor)
 
     print('Loaded', basedir, bds.min(), bds.max())
 
     # Correct rotation matrix ordering and move variable dim to axis 0
-    # 选择矩阵变换[x,y,z]->[y,-x,z]，把变量维度就是表示图像个数的移到第一个维度poses[N,3,5] bds [N,2] images[N,h,w,c]
+    # 选择矩阵变换[x,y,z]->[y,-x,z]，把变量维度就是表示图像个数的移到第一个维度
     #! 疑问：这里为什么要对旋转矩阵进行变换？
+    # [(3, 1, 20), (3, 1, 20), (3, 3, 20)]沿着dim=1进行cat,结果还是(3, 5, 20)
     poses = np.concatenate(
         [poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
+    # (3, 5, 20) -> (20, 3, 5), np.moveaxis的后两个参数是把原先-1轴移动成0轴
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
+    # (378, 504, 3, 20) -> (20, 378, 504, 3)
     imgs = np.moveaxis(imgs, -1, 0).astype(np.float32)  # 这个意思就是把最后一个维度移动到第0个维度
     images = imgs
+    # (2, 20) -> (20, 2)
     bds = np.moveaxis(bds, -1, 0).astype(np.float32)
 
     # Rescale if bd_factor is provided
@@ -313,21 +363,24 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     poses[:, :3, 3] *= sc
     bds *= sc
 
+    # Step 2. 重新定义相机位姿的world系，让world系坐标原点位于场景中心
     # 计算poses 的均值，将所有pose做个该均值逆转换，简单来说重新定义了世界坐标系，原点大致在被测物中心
     if recenter:
         poses = recenter_poses(poses)
 
+    # Step 3. 生成最终渲染视频的新视角的相机位姿
     if spherify:  # 是否对位姿进行球形化，好像正常操作没有这样设置
         poses, render_poses, bds = spherify_poses(poses, bds)
-
+    # 乳沟不是360度的设置
     else:
         # 前面做过recenter pose的均值就是R是单位阵，T是0
-        #; 注意这里如何理解，因为之间对旋转和平移进行了去中心化，所以这里再次计算平均值的化，就是I了
+        #; 验证前面的重新定义坐标系是否正确执行了，因为之间对旋转和平移进行了去中心化，
+        #; 所以这里再次计算平均值的化就是I了，
         c2w = poses_avg(poses)
         print('recentered', c2w.shape)
         print(c2w[:3, :4])
 
-        # Step 生成螺旋路径？下面的暂时没有看懂
+        #! 生成螺旋路径？下面的暂时没有看懂
         # Get spiral
         # Get average pose
         up = normalize(poses[:, :3, 1].sum(0))
@@ -336,7 +389,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
         # 最近最远深度值
         # 又对设置的边界进行了缩放，这里感觉是为了扩大范围？
         close_depth, inf_depth = bds.min()*.9, bds.max()*5.
-        #! 疑问：这又是啥操作？
+        #! 疑问：为什么这么计算？
         dt = .75
         mean_dz = 1./(((1.-dt)/close_depth + dt/inf_depth))
         focal = mean_dz
@@ -349,6 +402,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
         c2w_path = c2w
         N_views = 120
         N_rots = 2
+        # 这里默认是False，所以不执行
         if path_zflat:
             # zloc = np.percentile(tt, 10, 0)[2]
             zloc = -close_depth * .1
@@ -358,22 +412,26 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
             N_views /= 2
 
         # Generate poses for spiral path
-        # 生成用来渲染的螺旋路径的位姿
+        # [(3, 5), ...]，list长度为120，生成用来渲染的螺旋路径的位姿
         render_poses = render_path_spiral(
             c2w_path, up, rads, focal, zdelta, zrate=.5, rots=N_rots, N=N_views)
-
+    # (120, 3, 5)，即新的视角的相机位姿
     render_poses = np.array(render_poses).astype(np.float32)  # [n_views,3,5]
-
-    c2w = poses_avg(poses)
+    
+    # (3, 5)，其中相机位姿部分仍然是单位阵
+    c2w = poses_avg(poses)  
     print('Data:')
-    print(poses.shape, images.shape, bds.shape)  # (20, 3, 5) (20, 378, 504, 3) (20, 2)
+    # (20, 3, 5) (20, 378, 504, 3) (20, 2)
+    print(poses.shape, images.shape, bds.shape)  
 
     #; 计算平移距离世界坐标系原点最近的那个相机，作为holdeout view
+    # np.square: (20, 3) np.sum: (20, ), 这里其实就是算所有相机到坐标原点的距离的平方和
     dists = np.sum(np.square(c2w[:3, 3] - poses[:, :3, 3]), -1)
     i_test = np.argmin(dists)  # 距离最小值对应的下标
-    print('HOLDOUT view is', i_test)  # llff/fern数据集，结果是12
+    print('HOLDOUT view is', i_test)  
 
     images = images.astype(np.float32)
     poses = poses.astype(np.float32)
 
+    # (20, 378, 504, 3), (20, 3, 5), (20, 2), (120, 3, 5), 一个数字
     return images, poses, bds, render_poses, i_test

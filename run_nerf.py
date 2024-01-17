@@ -168,12 +168,12 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     # 渲染，reshape
     all_ret = batchify_rays(rays, chunk, **kwargs)
     for k in all_ret:
-        print("before: ", k, all_ret[k].shape)
+        # print("before: ", k, all_ret[k].shape)
         #; list(sh[:-1])得到第一个维度，即N_rays；list(all_ret[k].shape[1:])得到输出结果的后面的维度
         #; 不过感觉这里的reshape没有必要？已经是这个shape了。经过验证确实是这样，这里reshape是多余的
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
-        print("after: ", k, all_ret[k].shape)
+        # print("after: ", k, all_ret[k].shape)
 
     k_extract = ['rgb_map', 'disp_map', 'acc_map']
     ret_list = [all_ret[k] for k in k_extract]
@@ -566,7 +566,8 @@ def render_rays(ray_batch,
 
 
 def config_parser():
-    #; 之前好像没有看到过导入这种包？
+    """设置参数，并读取配置文件中参数"""
+    # configargparse 是一个 Python 库，是对标准库中 argparse 模块的扩展，提供更多的功能和选项
     import configargparse  
     parser = configargparse.ArgumentParser()
     parser.add_argument('--config', is_config_file=True,
@@ -586,38 +587,38 @@ def config_parser():
     parser.add_argument("--netdepth_fine", type=int, default=8,
                         help='layers in fine network')  # fine网络层数
     parser.add_argument("--netwidth_fine", type=int, default=256,
-                        help='channels per layer in fine network')  # 每层通道数
-    #; 32*32*4=4096， 也就是每一次梯度下降的时候随机选择4096个光束进行计算。
-    #! 疑问：为什么选4096呢？其次这里写成32*32*4有什么对应关系吗？为什么不直接写成4096？
+                        help='channels per layer in fine network')  # fine网络每层通道数
+    # 光线条数的batch_size，也就是每一次梯度下降的时候随机选择4096个光束进行计算
     parser.add_argument("--N_rand", type=int, default=32*32*4,
                         help='batch size (number of random rays per gradient step)')  # batch size光束数量
+    # Adam优化器需要配置的两个参数
     parser.add_argument("--lrate", type=float, default=5e-4,
-                        help='learning rate')  # 学习率
+                        help='learning rate')  # 初始学习率
     parser.add_argument("--lrate_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')  # 指数学习衰减（每1000步）
     
-    # 并行处理的光线数量，如果内存不足则减少
-    #; 这里的意思是如果选择的光线的batch_size太大，一次计算会超过显存，那么就把一个batch_size的光线
-    #;  分成几个小的batch来计算，然后把最后的结果cat起来就可以了。注意这个和修改batch_size有区别，
-    #;  因为这样还是在并行计算一个batch_size, 只不过限于显存限制分成多次计算了，这样和一次计算整个batch_size
-    #;  对梯度下降没有影响。而如果修改了batch_size来降低计算量，那么梯度下降也会变化
+    #; 并行处理的光线数量，如果内存不足则减少
+    #  注意：这里的意思是如果选择的光线的batch_size太大，一次计算会超过显存，那么就把一个batch_size的光线
+    #    分成几个小的batch来计算，然后把最后的结果cat起来就可以了。注意这个和修改batch_size有区别，
+    #    因为这样还是在并行计算一个batch_size, 只不过限于显存限制分成多次计算了，这样和一次计算整个batch_size
+    #    对梯度下降没有影响。而如果修改了batch_size来降低计算量，那么梯度下降也会变化
     parser.add_argument("--chunk", type=int, default=1024*32,
                         help='number of rays processed in parallel, decrease if running out of memory') 
     
-    # 通过网络并行发送的点数，内存不足就减少
-    #; 这里和上面的意思差不多，但是是为了解决另一个角度造成的显存不足。对于一根光线，需要在他上面采样N个点，
-    #; 然后把N个点的位置都送入到网络中预测它的颜色和不透明度，然后再把一条光线上的所有点颜色融合起来得到这条
-    #; 光线的颜色。这里就可以看出来，每一条光线上都有很多点，又增加了计算量，同样还可能超过显存。所以这里就
-    #; 再次把N_rays*N_samples分多次计算，最终的结果在cat起来，得到和一次计算一样的结果
+    #; 通过网络并行光线上的点数，内存不足就减少
+    #  注意：这里和上面的意思差不多，但是是为了解决另一个角度造成的显存不足。对于一根光线，需要在他上面采样N个点，
+    #    然后把N个点的位置都送入到网络中预测它的颜色和不透明度，然后再把一条光线上的所有点颜色融合起来得到这条
+    #    光线的颜色。这里就可以看出来，每一条光线上都有很多点，又增加了计算量，同样还可能超过显存。所以这里就
+    #    再次把 N_rays*N_samples 分多次计算，最终的结果在cat起来，得到和一次计算一样的结果
     parser.add_argument("--netchunk", type=int, default=1024*64,
                         help='number of pts sent through network in parallel, decrease if running out of memory') 
     
-    # 是否一次只从一张图像中获取随机光线
-    #; 这里的batching指的是从不同图像中获得光线，如果不使用batch，那么每次就随机选一张图，
-    #; 然后从这张图中随机选择N_rays条光线
+    #; 是否一次只从一张图像中获取随机光线，默认为false
+    #  注意：这里的 batching 指的是从不同图像中获得光线，如果不使用 batch，那么每次就随机选一张图，
+    #    然后从这张图中随机选择 N_rays 条光线
     parser.add_argument("--no_batching", action='store_true',
                         help='only take random rays from 1 image at a time')  
-    # 不从保存的ckpt加载权重
+    # 默认不从保存的ckpt加载权重，
     parser.add_argument("--no_reload", action='store_true',
                         help='do not reload weights from saved ckpt')  
     # 为coarse网络加载指定权重
@@ -646,29 +647,32 @@ def config_parser():
     # 多分辨率位置编码最大频率的log2（2D方向），也就是使用2^0 ~ 2^3这么多频率的方向编码
     parser.add_argument("--multires_views", type=int, default=4,
                         help='log2 of max freq for positional encoding (2D direction)')  
-    # 噪声方差
+    #! 对输出的体密度添加噪声，为什么有这一项？
     parser.add_argument("--raw_noise_std", type=float, default=0.,
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended') 
     
     # 仅渲染，加载权重和渲染pose路径
     parser.add_argument("--render_only", action='store_true',
                         help='do not optimize, reload weights and render out render_poses path') 
-    # 渲染测试集而不是pose路径
+    # 渲染测试集而不是根据自己设置的pose来渲染，这样是为了把渲染结果和测试集的真值进行对比
     parser.add_argument("--render_test", action='store_true',
                         help='render the test set instead of render_poses path')  
-    # 下采样因子，以加速渲染
+    # 下采样因子，其实就是缩小因子以加速渲染
     parser.add_argument("--render_factor", type=int, default=0,
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')  
 
     # training options 训练参数
+    #! 这些参数是干嘛的，使用到了吗？
     parser.add_argument("--precrop_iters", type=int, default=0,
                         help='number of steps to train on central crops')
     parser.add_argument("--precrop_frac", type=float,
                         default=.5, help='fraction of img taken for central crops')
 
-    # dataset options
+    # dataset options 
+    # 数据集类型，应该是不同的数据集使用的位姿表示形式不同 
     parser.add_argument("--dataset_type", type=str, default='llff',
                         help='options: llff / blender / deepvoxels')  # 数据类型
+    # 从训练集的图像中每隔8张图像，就拿出一张作为测试集/验证集
     parser.add_argument("--testskip", type=int, default=8,
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
 
@@ -682,23 +686,26 @@ def config_parser():
     parser.add_argument("--half_res", action='store_true',  # 使用一般分辨率
                         help='load blender synthetic data at 400x400 instead of 800x800')
 
-    # llff flags
+    # llff flags llff数据集专用参数
+    # 图像缩放系数，原图太大了训练速度太慢
     parser.add_argument("--factor", type=int, default=8,
-                        help='downsample factor for LLFF images')  # 图像下采样率
-    parser.add_argument("--no_ndc", action='store_true',  # 默认不使用标准化坐标系（为非前向场景设置）
+                        help='downsample factor for LLFF images')  
+    # 默认不使用标准化坐标系（为非前向场景设置）
+    parser.add_argument("--no_ndc", action='store_true', 
                         help='do not use normalized device coordinates (set for non-forward facing scenes)')
+    
     #! 疑问：下面这几个都没有太明白
-    # 关于action='store_true'这个参数，见：https://www.zhihu.com/question/56692630  https://blog.csdn.net/liuweiyuxiang/article/details/82918911
-    # 简单来说，如果是action='store_true'，那么调用脚本的时候如果没有传入--lindisp这个参数，那么不会触发action，
-    # 那么结果仍然是默认的结果，也就是仍然是false。如果传入了这个参数，那么就会触发action，从而变成true
-    parser.add_argument("--lindisp", action='store_true',  # 默认在视差上均匀采样而非深度图
+    # 是否在时差图（深度图的倒数）上进行均匀采样，默认为False，也就是默认在深度图上进行采样
+    parser.add_argument("--lindisp", action='store_true',  
                         help='sampling linearly in disparity rather than depth')
+    # 是否是360度场景，这里默认不是
     parser.add_argument("--spherify", action='store_true',
-                        help='set for spherical 360 scenes')  # 360度场景
-    parser.add_argument("--llffhold", type=int, default=8,  # 取1/N测试数据来测试
+                        help='set for spherical 360 scenes')
+    # 在训练集中每隔8张图片取出一张图片作为验证集
+    parser.add_argument("--llffhold", type=int, default=8,  
                         help='will take every 1/N images as LLFF test set, paper uses 8')
 
-    # logging/saving options
+    # logging/saving options ng 训练过程n中打印和保存的参数
     parser.add_argument("--i_print",   type=int, default=100,
                         help='frequency of console printout and metric loggin')
     parser.add_argument("--i_img",     type=int, default=500,
@@ -718,10 +725,11 @@ def train():
     parser = config_parser()
     args = parser.parse_args()
 
-    # Step 2 Load data
-    K = None   # 相机内参，默认未知，通过hwf算出来
-    # 模式是使用llff这种数据类型
+    # Step 2 读取数据集中的数据，包括图像、相机位姿
+    K = None   # 相机内参，默认未知，通过图像的宽、高、焦距手动算出来
     if args.dataset_type == 'llff':
+        # Step 2.1. 读取数据集中的图像、相机位姿
+        # (20, 378, 504, 3) (20, 3, 5) (20, 2) (120, 3, 5) 12
         images, poses, bds, render_poses, i_test = \
             load_llff_data(args.datadir, args.factor,
                             recenter=True, bd_factor=.75,
@@ -736,19 +744,20 @@ def train():
         if not isinstance(i_test, list):
             i_test = [i_test]  # 转成list，[12]
 
+        # Step 2.2. 如果配置文件中选择了隔N张图像选择一张做测试，则把测试和训练的图像都选择出来
         if args.llffhold > 0:
             print('Auto LLFF holdout,', args.llffhold)
             # 生成以llffhold为间隔的不超过图像总数的list [0,8,16]
             i_test = np.arange(images.shape[0])[::args.llffhold]
-
-        i_val = i_test  # len=3
-        #! 疑问：什么操作？i_test和i_val不是相等的吗？判断俩干啥？
+        # [0, 8, 16]，测试图像的索引
+        i_val = i_test  
+        # 从0-19，除了0，8，16d之外的那些图像的索引
         i_train = np.array([i for i in np.arange(int(images.shape[0])) if
                             (i not in i_test and i not in i_val)])  # list len=17
         # 计算最近最远边界值
         print('DEFINING BOUNDS')
         #; 如果不使用ndc空间，那么最近最远就按照参数文件中设置的值来确定，否则就要归一化到[0,1]之间
-        if args.no_ndc: 
+        if args.no_ndc:  # llff数据集是False 
             near = np.ndarray.min(bds) * .9
             far = np.ndarray.max(bds) * 1.
         else:
@@ -802,9 +811,10 @@ def train():
         print('Unknown dataset type', args.dataset_type, 'exiting')
         return
 
+    # Step 3. 利用数据集中读取的hwf参数手动计算相机内参
     # Cast intrinsics to right types
     # 将内参转为正确的类型内参矩阵
-    H, W, focal = hwf
+    H, W, focal = hwf  # hwf.shape = (3,)
     H, W = int(H), int(W)
     hwf = [H, W, focal]
 
@@ -816,19 +826,22 @@ def train():
             [0, 0, 1]
         ])  # fx fy cx cy
 
-    # 这里应该是没有执行
+    # 这里默认是False
     if args.render_test:
         render_poses = np.array(poses[i_test])
 
+    # Step 4 创建log 路径，保存训练用的所有参数到args,复制config参数并保存
     # Create log dir and copy the config file
-    # Step 3 创建log 路径，保存训练用的所有参数到args,复制config参数并保存
     basedir = args.basedir
     expname = args.expname
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
     f = os.path.join(basedir, expname, 'args.txt')
     # 把argParse中的参数全部写入文件中
     with open(f, 'w') as file:
+        # vars是python内置函数，返回对象的__dict__属性，这里就是把args转成dict
+        # sorted对上一步的dict进行排序
         for arg in sorted(vars(args)):
+            # getattrp是Python内置函数，获取对象的属性值，可以认为就是获取对象的成员变量的值
             attr = getattr(args, arg)
             file.write('{} = {}\n'.format(arg, attr))
     # 把这次训练使用的config参数也保存下来
@@ -837,8 +850,8 @@ def train():
         with open(f, 'w') as file:
             file.write(open(args.config, 'r').read())
 
+    # Step 5 模型构建，训练和测试参数，起始step,优化器
     # Create nerf model
-    # Step 4 模型构建，训练和测试参数，起始step,优化器
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = \
         create_nerf(args)
     global_step = start

@@ -1,5 +1,6 @@
 {
-    "python.pythonPath": "/home/cc/anaconda3/envs/nerf/bin/python",
+    "python.pythonPath": "/home/cc/miniconda/envs/nerf/bin/python",
+	"python.analysis.autoFormatStrings": true,
     "doxdocgen.generic.paramTemplate": "@param[in] {param} ",
 	"todo-tree.highlights.defaultHighlight": {
 	"icon": "alert",
