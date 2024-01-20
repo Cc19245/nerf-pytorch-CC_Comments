@@ -1,0 +1,16 @@
+expname = fern_debug
+basedir = ./logs
+datadir = ./data/nerf_llff_data/fern
+dataset_type = llff
+
+factor = 8     # 只和llff数据集有关的参数，原图的缩小倍数，为了加速训练
+llffhold = 8   # 在训练集中每隔8张图片取出一张图片作为验证集
+
+# 这个就是原始的配置参数
+N_rand = 1024       # 光线条数的batch_size，也就是网络一次更新中使用的光线条数
+N_samples = 64      # coarse网络每条光线采样点的个数
+N_importance = 64   # fine网络额外进行精细采样的点的个数
+
+use_viewdirs = True
+raw_noise_std = 1e0
+

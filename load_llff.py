@@ -2,6 +2,8 @@ import numpy as np
 import os
 import imageio
 
+# 显示相机位姿
+from plot_cam_poses import plot_camera_poses
 
 # Slightly modified version of LLFF data loading code
 # see https://github.com/Fyusion/LLFF for original
@@ -95,15 +97,15 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     # Step 1. 读取位姿和场景深度范围
     # [imagesN,17] [20,17]存放的位姿和bds
     poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))   # .npy是numpy专用的二进制文件存储格式
-    # ; 注意这里位姿为什么是3x5, 因为3x3是旋转，第4列是平移，第5列分别是h, w, f
+    # 注意这里位姿为什么是3x5, 因为3x3是旋转，第4列是平移，第5列分别是h, w, f
     # (20, 15) -> (20, 3, 5) -> (3, 5, 20)
     poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1, 2, 0])
     bds = poses_arr[:, -2:].transpose([1, 0])  # bounds 深度范围, (20, 2) -> (2, 20)
 
-    # ; 下面的操作首先是一个列表生成，先使用listdir把文件夹下的所有文件列出来，然后sorted对文件名排序，
-    # ; 然后if条件生成，得到图片名称的路径。最后一步[0]取出第一张图像的文件名
+    # 下面的操作首先是一个列表生成，先使用listdir把文件夹下的所有文件列出来，然后sorted对文件名排序，
+    # 然后if条件生成，得到图片名称的路径。最后一步[0]取出第一张图像的文件名
     img0 = [os.path.join(basedir, 'images', f) for f in sorted(os.listdir(os.path.join(basedir, 'images')))
-            if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')][0]  # 读取一张图像
+            if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')][0]  
     sh = imageio.imread(img0).shape  # [h,w,c]  eg.[3024,4032,3]
 
     sfx = ''
@@ -155,7 +157,7 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
 
     def imread(f):
         if f.endswith('png'):
-            # 原始语句运行报错解决：https://zhuanlan.zhihu.com/p/630948914
+            #; 原始语句运行报错解决：https://zhuanlan.zhihu.com/p/630948914
             # return imageio.imread(f, ignoregamma=True)
             return imageio.imread(f, format="PNG-PIL", ignoregamma=True)
         else:
@@ -204,8 +206,10 @@ def poses_avg(poses):
     # (3,) 把位姿中第4列，也就是平移取出来，求平均，得到平移的均值
     center = poses[:, :3, 3].mean(0)
     # (3,) poses[:, :3, 2]: (20, 3)  .sum(0): (3,)    
-    vec2 = normalize(poses[:, :3, 2].sum(0)) # 对所有相机的旋转向量的最后一列求和，再归一化
+    #; 对所有相机的旋转向量的最后一列求和，再归一化。注意最后一列其实就是相机的Z轴，所以这里就是求Z轴的平均方向
+    vec2 = normalize(poses[:, :3, 2].sum(0)) 
     # (3,)
+    #; 旋转向量的第2列求和，其实就是求相机Y轴的平均方向
     up = poses[:, :3, 1].sum(0)  # 对旋转向量的第2列求和
     # [(3, 4), (3, 1)] 沿着维度1拼接 -> (3, 5)
     c2w = np.concatenate([viewmatrix(vec2, up, center), hwf], 1)
@@ -339,15 +343,23 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     # 原始数据读取，位姿:poses，采样far,near信息即深度值范围:bds，rgb图像:imgs
     # (3, 5, 20)  (2, 20)  (378, 504, 3, 20)
     poses, bds, imgs = _load_data(basedir, factor=factor)
-
     print('Loaded', basedir, bds.min(), bds.max())
 
+    # Step 2. 将LLFF的DRB坐标系转成OpenGL(NeRF)的RUB坐标系
     # Correct rotation matrix ordering and move variable dim to axis 0
-    # 选择矩阵变换[x,y,z]->[y,-x,z]，把变量维度就是表示图像个数的移到第一个维度
-    #! 疑问：这里为什么要对旋转矩阵进行变换？
-    # [(3, 1, 20), (3, 1, 20), (3, 3, 20)]沿着dim=1进行cat,结果还是(3, 5, 20)
-    poses = np.concatenate(
-        [poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
+    #; 源代码实现方式
+    # # 选择矩阵变换[x,y,z]->[y,-x,z]，把变量维度就是表示图像个数的移到第一个维度
+    # # [(3, 1, 20), (3, 1, 20), (3, 3, 20)]沿着dim=1进行cat,结果还是(3, 5, 20)
+    # poses = np.concatenate(
+    #     [poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
+    #; 使用旋转矩阵乘法的实现方式
+    r_drb_rub = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])  # (3, 3) 坐标系转换向量
+    rot_w_drb = np.moveaxis(poses[:, :3, :], -1, 0)  # (20, 3, 3) 取出DRB相机坐标系的位姿，并调整batch维度位置
+    rot_w_rub = rot_w_drb[..., :3] @ r_drb_rub[None, ...]  # (20, 3, 3) 广播实现矩阵乘法，把相机位姿转到RUB坐标系下
+    poses[:, :3, :] = np.moveaxis(rot_w_rub, 0, -1)  # 重新赋值到原始变量中
+    #? add: 测试绘制相机的位姿
+    # plot_camera_poses(poses[:, :4, :])
+
     # (3, 5, 20) -> (20, 3, 5), np.moveaxis的后两个参数是把原先-1轴移动成0轴
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
     # (378, 504, 3, 20) -> (20, 378, 504, 3)
@@ -371,7 +383,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     # Step 3. 生成最终渲染视频的新视角的相机位姿
     if spherify:  # 是否对位姿进行球形化，好像正常操作没有这样设置
         poses, render_poses, bds = spherify_poses(poses, bds)
-    # 乳沟不是360度的设置
+    # 如果不是360度的设置
     else:
         # 前面做过recenter pose的均值就是R是单位阵，T是0
         #; 验证前面的重新定义坐标系是否正确执行了，因为之间对旋转和平移进行了去中心化，

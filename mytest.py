@@ -1,5 +1,10 @@
 import numpy as np
-import torch 
 
-for i in range(0, 1024, 32768):
-    print(i)
+# 示例数组形状为 (3, 4, 5)
+arr = np.random.random((3, 4, 5))
+
+# 将轴从 0 移动到 2，交换第一个和第三个轴
+arr_moved = np.moveaxis(arr, 0, 2)
+
+# 打印移动后的数组形状
+print(arr_moved.shape)

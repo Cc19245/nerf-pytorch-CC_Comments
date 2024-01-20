@@ -12,7 +12,7 @@
             "program": "${workspaceFolder}/run_nerf.py",   // 固定run_nerf.py文件
             "console": "integratedTerminal",
             "args": [
-                "--config", "configs/fern.txt"
+                "--config", "configs/fern_debug.txt"
             ]
         }
     ]

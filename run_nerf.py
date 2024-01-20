@@ -77,7 +77,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         embedded = torch.cat([embedded, embedded_dirs], -1)
     
     # Step 2.以更小的batch-netchunk送进网络，多次计算对应点的体密度和颜色，最后再把结果拼接
-    # 注意：这个写法还挺有意思的，如果netchunk不是None的话，batchify函数里面会把fn函数分成netchunk轮多次
+    #; 注意：这个写法还挺有意思的，如果netchunk不是None的话，batchify函数里面会把fn函数分成netchunk轮多次
     #   计算，每次都使用更小的数据量进行计算，最后再沿着这个列表的第0维进行concat得到输出，也就是相当于网络输入
     #   一次数据的数量太大了，比如上面就是 N_rays*N_samples这么多个数据，这样显存可能不支持同时计算这么大的
     #   数据(即这么多的3D采样点)，那么就把这些点分成很多小批量计算，把每个小批量计算的结果再cat起来，就得到了
@@ -105,15 +105,15 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
         _type_: _description_
     """
     all_ret = {}
-    #; 从这里就能看出来这个chunk的作用了，实际上就是一个batch中光线数量可能很大，这个时候可以在外面自己把
-    #; batch_size改小，但是这样每次梯度下降就只能使用很小的一部分光线进行计算，不准确。所以这里就把一个
-    #; batch的光线分几次算，把最终结果加起来，这样和使用batch_size算一次结果是一样的，只不过由于内存不足多次算而已
+    #; 注意：从这里就能看出来这个chunk的作用了，实际上就是一个batch中光线数量可能很大，这个时候可以在外面自己把
+    #; batch_size改小，但是这样每次梯度下降就只能使用很小的一部分光线进行计算，不准确。所以这里就把一个batch的
+    #; 光线分几次算，把最终结果加起来，这样和使用batch_size算一次结果是一样的，只不过由于内存不足多次算而已
     for i in range(0, rays_flat.shape[0], chunk):
         ret = render_rays(rays_flat[i:i+chunk], **kwargs)
         for k in ret:
             if k not in all_ret:
                 all_ret[k] = []  # 初始化键对应的值为一个list
-            #; 这里的操作就是每一次计算的小批量的结果都存到字典的对应位置中，然后后面再cat
+            # 这里的操作就是每一次计算的小批量的结果都存到字典的对应位置中，然后后面再cat
             all_ret[k].append(ret[k]) 
     # 将所有的结果拼接一起返回
     all_ret = {k: torch.cat(all_ret[k], 0) for k in all_ret}
@@ -149,18 +149,17 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
       acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
       extras: dict with everything returned.其它
     """
-    # Step 1. 把光线原点和光线方向拿出来，并且转成NDC坐标系下的表示
-    if c2w is not None:
+    # Step 1. 把光线原点和光线方向拿出来，并对光线方向rays_d进行归一化得到视角方向viewdirs
+    if c2w is not None:  # 实际传入是None，也就是光线方向已经被计算完成了
         # special case to render full image
         # render所有图像
         rays_o, rays_d = get_rays(H, W, K, c2w)
-    # 训练时走这个分支，也就是使用预先计算的光线
     else:
         # use provided ray batch
         # 注意rays是[2,B,3]，但是这样分别取之后，2维度就消失了，每一个都是[B,3]
         rays_o, rays_d = rays  
 
-    # 对光线的方向g向量进行归一化，这里默认使用方向向量
+    # 对光线方向rays_d进行归一化得到视角方向viewdirs
     if use_viewdirs:
         # provide ray directions as input
         viewdirs = rays_d  # (B, 3)
@@ -174,15 +173,15 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         # 结果还是(B, 3)
         viewdirs = torch.reshape(viewdirs, [-1, 3]).float() 
     
-    # 元组, (B, 3)
-    sh = rays_d.shape  # [..., 3] [1024,3]
-    #; 如果使用ndc空间，那么还需要把光线原点和方向进行进一步的处理
+    # Step 2. 如果使用ndc空间，那么需要把光线中心和光线方向转化到ndc空间中
+    sh = rays_d.shape   # 元组, (B, 3)
     if ndc:
         # for forward facing scenes
         # (B, 3)  (B, 3), 维度没有变化，只是变成了NDC坐标系的表示
+        #! 疑问：这个地方传入的第4个形参near=1.0，但是按照公式推导为什么不是focal?
         rays_o, rays_d = ndc_rays(H, W, K[0][0], 1., rays_o, rays_d)
     
-    # Step 2. 创建一批光线，包括光线起点、光线方向、光线深度的最小最大值
+    # Step 3. 创建一批光线，包括光线起点、光线方向、光线深度的最小最大值
     # Create ray batch
     # 均为 (B, 3)
     rays_o = torch.reshape(rays_o, [-1, 3]).float()  
@@ -193,16 +192,17 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     # (B, 3+3+1+1) = (B, 8), torch.cat不会增加维度，而是会在指定的维度上进行concat
     rays = torch.cat([rays_o, rays_d, near, far], -1)  
     #! 疑问: 上面不是已经有光线方向了吗？这里为什么还要cat光线方向？
+    #; 解答：上面的光线方向不是归一化向量，是用于计算采样点的公式中的d，这里的viewdirs是归一化向量用于表示视角方向
     if use_viewdirs:
         rays = torch.cat([rays, viewdirs], -1)  # (B, 11)
 
-    # Step 3. 调用函数渲染，里面会使用for循环分批多次渲染，以防止超过显存
+    # Step 4. 调用函数渲染，里面会使用for循环分批多次渲染，以防止超过显存
     # Render and reshape
     all_ret = batchify_rays(rays, chunk, **kwargs)
     for k in all_ret:
         # print("before: ", k, all_ret[k].shape)
         #; 把结果的第一个维度reshape成batch_size，也就是光线的个数
-        # 注意：list(sh[:-1])得到第一个维度，即N_rays；list(all_ret[k].shape[1:])得到输出结果的后面的维度
+        # 注意：list(sh[:-1])得到第一个维度，即 N_rays；list(all_ret[k].shape[1:])得到输出结果的后面的维度
         #   不过感觉这里的reshape没有必要？已经是这个shape了。经过验证确实是这样，这里reshape是多余的
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
@@ -292,6 +292,9 @@ def create_nerf(args):
     # Step 3.2. fine网络实例化，仅仅是网络深度和每层通道数不同
     model_fine = None
     #! 疑问：为什么refine网络又要重新定义一遍，而不是使用上面的同样的网络？
+    #; 解答：从技术原理上来说是可以的，但是使用coarse和finew两个网络，可以让coarse网络只估计场景的粗略结构，
+    #;      而fine网络专注于细节，这样可以让coarse网络快速收敛，从而指导fine网络的精细采样也快速收敛到正确  
+    #;      位置。总的来说，使用coarse和fine两个网络有助于提高网络的收敛速度。
     if args.N_importance > 0:
         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
@@ -392,6 +395,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     def raw2alpha(raw, dists, act_fn=F.relu): 
         #! 疑问：这里对输出的不透明度又加了relu，那么就是说网络输出的并不是最终的不透明度？
         #   那为什么不把这个relu放到网络里呢？还是说这里只是为了实现一个max的效果，因为密度必须>0?
+        #; 解答：也可以，其实直接放到网络里面代码更加规范一些，这样显得有点乱
         return 1. - torch.exp(-act_fn(raw)*dists)
     
     # Step 1. 计算采样点之间的距离，即论文中的delta
@@ -401,12 +405,11 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1)  
     # (B, N), rays_d[..., None, :] = (B, 1, 3)  norm = (B, 1)
     #! 疑问：这里求模长干什么？模长不都是1吗？
-    #; 注意：这里的方向向量并不是单位向量，还是需要看一下坐标系的定义
+    #; 注意：这里的光线方向并不是单位向量，而是从相机光心指向成像平面的向量，所以不同的光线方向的向量长度是不一样的
     dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
     
     # Step 2. 取出网络输出的颜色，并由网络输出的体密度计算不透明度
     # rgb
-    #! 疑问：这里为什么要对输出颜色取sigmoid？彩色是为了让输出的颜色在0-1之间？那么为什么不把它放到网络里呢？
     rgb = torch.sigmoid(raw[..., :3])  # [B, N, 3]
     noise = 0.
     # 如果有噪声,选需要对体密度添加噪声
@@ -436,15 +439,16 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
     
     # (B, ) 深度图计算d=Σwizi，(B, N) * (B, N), sum(-1) -> (B, )
-    #; 注意：从这里可以理解上面的权重到底是什么，其实就是概率密度函数，
-    #;   所以不论是渲染rgb颜色还是深度图，都是在算期望
+    #; 注意：从这里可以理解上面的权重到底是什么，其实就是概率密度函数，所以不论是渲染rgb颜色还是深度图，都是在算期望
     depth_map = torch.sum(weights * z_vals, -1)
     
     # (B, ) 视差图计算
     disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map),
                             depth_map / torch.sum(weights, -1))
     
-    # (B, ) 这个表示什么？
+    #! 疑问： (B, ) 这个表示什么？
+    #; 解答：这个就是所有点累积的不透明度，如果是0的话，那么说明当前像素位置是没有物体的，
+    #;      这个是针对blenders合成数据集背景部分来说的
     acc_map = torch.sum(weights, -1)  # 权重加和[1024]
 
     if white_bkgd:
@@ -512,7 +516,7 @@ def render_rays(ray_batch,          # (B, 11), 一个batch的光线
     viewdirs = ray_batch[:, -3:] if ray_batch.shape[-1] > 8 else None
     # (B, 1, 2) 光线上深度的最近、最远距离
     bounds = torch.reshape(ray_batch[..., 6:8], [-1, 1, 2])  
-    # (B, 1) (B, 1) 光线上深度的最近、最远距离，范围在[-1, 1]之内？
+    # (B, 1) (B, 1) 光线上深度的最近、最远距离，如果是NDC空间则范围为[0, 1]，否则按照真实范围来计算
     near, far = bounds[..., 0], bounds[..., 1]  
 
     # Step 2 corse sample, 得到粗糙的渲染结果
@@ -527,15 +531,16 @@ def render_rays(ray_batch,          # (B, 11), 一个batch的光线
     # (B, N) 维度张量的维度，也就是每一条光线都按照这个来进行采样
     z_vals = z_vals.expand([N_rays, N_samples]) 
 
-    #TODO 如果施加扰动，暂时没看
+    # Step 2.2. 采样点添加扰动，就是论文中说的在每个采样区间内进行均匀采样
     if perturb > 0.:
         # get intervals between samples
-        # 均值[N_rays, N_samples-1]
+        # (B, N-1), 每个采样区间的中点
         mids = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
-        upper = torch.cat([mids, z_vals[..., -1:]], -1)  # [N_rays, N_samples]
-        lower = torch.cat([z_vals[..., :1], mids], -1)  # [N_rays, N_samples]
+        # (B, N-1)，以每个采样点的位置为中心，上下偏移的区间范围
+        upper = torch.cat([mids, z_vals[..., -1:]], -1)  
+        lower = torch.cat([z_vals[..., :1], mids], -1)  
         # stratified samples in those intervals
-        # 在这些间隔中分层采样点
+        # 生成均匀分布的随机数，这样就可以以原始采样点为中心，在采样区间内均匀采样
         t_rand = torch.rand(z_vals.shape)  # [N_rays, N_samples]
 
         # Pytest, overwrite u with numpy's fixed random numbers
@@ -543,17 +548,18 @@ def render_rays(ray_batch,          # (B, 11), 一个batch的光线
             np.random.seed(0)
             t_rand = np.random.rand(*list(z_vals.shape))
             t_rand = torch.Tensor(t_rand)
+        # (B, N-1), 每个采样区间的起始位置 + [0~1] * 区间长度，变成以采样点为中心的均匀分布采样
         z_vals = lower + (upper - lower) * t_rand
 
-    # Step 2.2. 计算B条光线、每个光线上N个采样点的3D坐标，o+td
+    # Step 2.3. 计算B条光线、每个光线上N个采样点的3D坐标，o+td
     # (B, 1, 3) + (B, 1, 3) * (B, N, 1) = (B, N, 3) 广播操作
     pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
 
-    # Step 2.3. 送进网络进行预测，得到每个点的体密度和颜色值
+    # Step 2.4. 送进网络进行预测，得到每个点的体密度和颜色值
     # (B, N, 4) 每条光线上、每个点的体密度和颜色
     raw = network_query_fn(pts, viewdirs, network_fn)  # 传入调用网络的函数
 
-    # Step 2.4. 利用每条光线上采样点的体密度和颜色，进行体渲染，得到这条光线对应像素的颜色、深度图等
+    # Step 2.5. 利用每条光线上采样点的体密度和颜色，进行体渲染，得到这条光线对应像素的颜色、深度图等
     # (B, 3) (B, ) (B, ) (B, N) (B, )
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
         raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
@@ -572,7 +578,7 @@ def render_rays(ray_batch,          # (B, 11), 一个batch的光线
         z_samples = sample_pdf(z_vals_mid, weights[..., 1:-1], N_importance, 
                             det=(perturb == 0.), pytest=pytest)
         
-        #TODO 重要：这里必须切断梯度，因为fine采样点的位置是由weightd计算的，weight是coarse网络输出的
+        #! 重要：这里必须切断梯度，因为fine采样点的位置是由weightd计算的，weight是coarse网络输出的
         # 如果这里不切断梯度的话，那么fine网络的梯度也会影响到coarse网络
         z_samples = z_samples.detach()  
         
@@ -618,7 +624,7 @@ def config_parser():
     # configargparse 是一个 Python 库，是对标准库中 argparse 模块的扩展，提供更多的功能和选项
     import configargparse  
     parser = configargparse.ArgumentParser()
-    parser.add_argument('--config', is_config_file=True,
+    parser.add_argument('--config', is_config_file=True,  # 当前参数传入的是一个配置文件
                         help='config file path')  # 参数配置文件config.txt
     parser.add_argument("--expname", type=str,
                         help='experiment name')  # 实验名称，会创建不同的文件夹来存储输出结果
@@ -645,7 +651,7 @@ def config_parser():
     parser.add_argument("--lrate_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')  # 指数学习衰减（每1000步）
     
-    #; 并行处理的光线数量，如果内存不足则减少
+    #; 在进行渲染的时候并行处理的光线数量，如果内存不足则减少
     #  注意：这里的意思是如果选择的光线的batch_size太大，一次计算会超过显存，那么就把一个batch_size的光线
     #    分成几个小的batch来计算，然后把最后的结果cat起来就可以了。注意这个和修改batch_size有区别，
     #    因为这样还是在并行计算一个batch_size, 只不过限于显存限制分成多次计算了，这样和一次计算整个batch_size
@@ -681,6 +687,8 @@ def config_parser():
     parser.add_argument("--N_importance", type=int, default=0,
                         help='number of additional fine samples per ray') 
     #! 疑问：这个抖动是什么？
+    #; 解答：是在coarse网络中进行采样的时候，本来采样点是在采样范围内线性分布的，这里加入抖动就是每次训练采样点
+    #;      的位置都在原来的位置加入一个均匀分布的扰动，这样其实是和论文中的采样点在采样区间内均匀分布相符合的
     parser.add_argument("--perturb", type=float, default=1.,
                         help='set to 0. for no jitter, 1. for jitter')  # 是否有抖动
     # 是否使用视角方向，如果使用就是5D输入，不使用就是3D输入
@@ -695,7 +703,8 @@ def config_parser():
     # 多分辨率位置编码最大频率的log2（2D方向），也就是使用2^0 ~ 2^3这么多频率的方向编码
     parser.add_argument("--multires_views", type=int, default=4,
                         help='log2 of max freq for positional encoding (2D direction)')  
-    #! 对输出的体密度添加噪声，为什么有这一项？
+    #! 疑问：对输出的体密度添加噪声，为什么有这一项？
+    #; 解答：感觉是为了防止过拟合？让网络的输出更加鲁棒？但是为什么输出不在每个点的rgb上添加噪声呢？ -> 那样就太随机了？
     parser.add_argument("--raw_noise_std", type=float, default=0.,
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended') 
     
@@ -716,7 +725,7 @@ def config_parser():
     parser.add_argument("--precrop_frac", type=float,
                         default=.5, help='fraction of img taken for central crops')
 
-    # dataset options 
+    # Step 3. dataset options 数据集的相关参数
     # 数据集类型，应该是不同的数据集使用的位姿表示形式不同 
     parser.add_argument("--dataset_type", type=str, default='llff',
                         help='options: llff / blender / deepvoxels')  # 数据类型
@@ -728,8 +737,10 @@ def config_parser():
     parser.add_argument("--shape", type=str, default='greek',
                         help='options : armchair / cube / greek / vase')
 
-    # blender flags
-    parser.add_argument("--white_bkgd", action='store_true',  # 在白色背景下渲染合成数据
+    # blender flags blender类型的数据集相关的参数
+    #; blender数据集是合成的数据集，图片是rgba一共四个通道的，其中a是不透明度（打开图像可以看到背景部分没有颜色）。
+    #; 这个标志位就是如果设置成true, 那么就在读取数据集的时候把背景变成白色，这样背景也一起被训练。
+    parser.add_argument("--white_bkgd", action='store_true',  
                         help='set to render synthetic data on a white bkgd (always use for dvoxels)')
     parser.add_argument("--half_res", action='store_true',  # 使用一般分辨率
                         help='load blender synthetic data at 400x400 instead of 800x800')
@@ -738,15 +749,16 @@ def config_parser():
     # 图像缩放系数，原图太大了训练速度太慢
     parser.add_argument("--factor", type=int, default=8,
                         help='downsample factor for LLFF images')  
-    # 默认不使用标准化坐标系（为非前向场景设置）
+    # 是否不使用ndcz空间坐标系，这里默认是false，也就是默认使用ndc空间坐标系
     parser.add_argument("--no_ndc", action='store_true', 
                         help='do not use normalized device coordinates (set for non-forward facing scenes)')
     
-    #! 疑问：下面这几个都没有太明白
     # 是否在时差图（深度图的倒数）上进行均匀采样，默认为False，也就是默认在深度图上进行采样
     parser.add_argument("--lindisp", action='store_true',  
                         help='sampling linearly in disparity rather than depth')
     # 是否是360度场景，这里默认不是
+    #! 疑问：这个参数是干嘛的？
+    #; 解答：设置场景是否是360度场景，如果不是，那么就是faceforward场景，也就是相机位姿基本都是一个朝向的场景
     parser.add_argument("--spherify", action='store_true',
                         help='set for spherical 360 scenes')
     # 在训练集中每隔8张图片取出一张图片作为验证集
@@ -804,10 +816,10 @@ def train():
         # 计算最近最远边界值
         print('DEFINING BOUNDS')
         #; 如果不使用ndc空间，那么最近最远就按照参数文件中设置的值来确定，否则就要归一化到[0,1]之间
-        if args.no_ndc:  # llff数据集是False 
+        if args.no_ndc:  # llff数据集是False，也就是说LLFF数据集默认是使用ndc空间的
             near = np.ndarray.min(bds) * .9
             far = np.ndarray.max(bds) * 1.
-        else:
+        else:  # 使用ndc空间的near和far是固定的[0, 1]范围
             near = 0.
             far = 1.
         print('NEAR FAR', near, far)
@@ -822,7 +834,13 @@ def train():
         near = 2.
         far = 6.
 
+        # 如果使用白色背景，那么就把透明度为0的地方（背景）都设置成,白色这样网络也能使用背景像素进行训练
         if args.white_bkgd:
+            # images (N, H, W, 4) 4是rgba
+            # if images[..., 1] = 1, 则有物体，不透明：
+            #    images = images[..., :3] * 1 + (1-1) = images[..., :3] 即原始像素
+            # else, 则没有物体，透明：
+            #    images = images[..., :3] * 0 + (1-0) = 1, 也就是白色
             images = images[..., :3]*images[..., -1:] + (1.-images[..., -1:])
         else:
             images = images[..., :3]
@@ -865,7 +883,7 @@ def train():
     H, W = int(H), int(W)
     hwf = [H, W, focal]
 
-    # 计算相机内参
+    #; 计算相机内参, 注意这里默认相机的fx和fy是相等的，也就是水平和竖直两个方向的焦距是相等的
     if K is None:
         K = np.array([
             [focal, 0, 0.5*W],
@@ -951,19 +969,16 @@ def train():
         # For random ray batching
         print('get rays')
         # [N, ro+rd, H, W, 3] => [20, 2, 378, 504, 3]，ro是每个相机位置，rd是每条光线的方向
-        #; 注意stack会扩展维度，也就是把很多array在第0维上进行堆叠，扩展出一个维度
-        #; 下面的这个操作还是比较有意思，因为首先for进行列表生成，得到一个len=20的列表；
-        #; 列表中的每一个元素都是一个(ro, rd)的元组，而元组的每一个成员(ro或rd)都是(h,w,3)的array
-        #; 然后这里stack的时候在0维上对列表的每一个元素进行stack没问题，但是可以发现把每一个元素的元组
-        #; 也自动stack出一个维度，也就是最终[20, 2, 378, 504, 3]中的那个2
+        #; 注意：stack会扩展维度，也就是把很多array在第0维上进行堆叠，扩展出一个维度。下面的这个操作还是
+        #    比较有意思，因为首先for进行列表生成，得到一个len=20的列表；列表中的每一个元素都是一个(ro, rd)
+        #    的元组，而元组的每一个成员(ro或rd)都是(h,w,3)的array。然后这里stack的时候在0维上对列表的
+        #    每一个元素进行stack没问题，但是可以发现把每一个元素的元组也自动stack出一个维度，也就是最终
+        #    [20, 2, 378, 504, 3]中的那个2
         rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:, :3, :4]], 0)
         print('done, concats')
 
         # Step 7.2. 把每张图片的每个像素的rgb值也拼起来
-        # [N, ro+rd+rgb, H, W, 3] => [20,3,378,504,3]
-        #; images是所有图片，维度(20, 378, 504, 3)；这里images[:, None]维度为(20,1,378,504,3)
-        #; 关于[:, None]：https://www.codenong.com/js52dc9bbb16cf/   
-        #; 实际上None和np.newaxis是一样的，就是放在哪里，那么就在那个位置新生成一个轴
+        # [N, ro+rd+rgb, H, W, 3] => [20, 3, 378, 504, 3]
         rays_rgb = np.concatenate([rays, images[:, None]], 1)
         # [N, H, W, ro+rd+rgb, 3]
         rays_rgb = np.transpose(rays_rgb, [0, 2, 3, 1, 4])
@@ -988,7 +1003,8 @@ def train():
         rays_rgb = torch.Tensor(rays_rgb).to(device)
 
     # 迭代20万次，这里的次数指的是训练一个batch的次数，并不是epoch
-    N_iters = 200000 + 1  
+    #; 注意：200000在python中可以写成 200_000, 不影响正常解析。但是不能写成 2e5, 这样就变成float了，不能for循环
+    N_iters = 200000 + 1    
     print('Begin')
     print('TRAIN views are', i_train)  # 哪些图片用来训练
     print('TEST views are', i_test)    # 哪些图片用来测试
@@ -1007,8 +1023,7 @@ def train():
         if use_batching:
             # 每次从所有图像的 ray 中抽取 N_rand 个ray, 每遍历一遍就打乱顺序
             # Random over all images
-            #; 最后两个维度中，2+1表示相机中心、光线方向、像素颜色，
-            #; 最后的3是因为恰好这三个类变量都是3维的向量
+            #; 后两个维度中，2+1表示相机中心、光线方向、像素颜色，3是因为恰好这三个类变量都是3维的向量
             batch = rays_rgb[i_batch: i_batch + N_rand]  # [B, 2+1, 3*?]
             batch = torch.transpose(batch, 0, 1)  # [3, B, 3]
             # batch_rays=[2,B,3]为相机中心+光线方向，target_s=[B,3]为像素颜色

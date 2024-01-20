@@ -34,7 +34,6 @@ class Embedder:
         out_dim = 0
         # Step 1. 如果最后的位置编码函数包括原始数据，则加入原始数据的函数
         if self.kwargs['include_input']:  # 调用传入的是true
-            #! 疑问：这里向列表中添加的是lambda函数？
             #; 注意：这里先加一个不做任何编码的x自身值
             embed_fns.append(lambda x: x)
             out_dim += d  # 输出维度+3
@@ -264,7 +263,7 @@ def get_rays_np(H, W, K, c2w):
 
     Returns:
         _type_: (h, w, 3) 相机原点在world系下坐标（hw是广播得到的）
-                (h, w, 3) 每个像素的方向向量在world系下表示
+                (h, w, 3) 每个像素的方向向量在world系下表示，注意这里的方向向量是从相机光心指向成像平面的像素，不是单位向量
     """
     # Step 1. 生成图像上每个像素点的xy坐标
     # i,j的shape均为(378, 504)，然后i的每一行都是(0,1, ..., 503), j的每一列都是(0, 1, ..., 377)
@@ -274,16 +273,20 @@ def get_rays_np(H, W, K, c2w):
     
     # Step 2. 计算相机光心连接每个像素点的射线，在相机坐标系下的方向
     # 2D点到3D点计算[x,y,z]=[(u-cx)/fx, -(v-cy)/fy, -1]
-    #! 疑问: 该公式在y和z位置均乘-1，原因是nerf使用的坐标系是x轴向右，y轴向上，z轴向外。为何？
-    #; [h, w, 3]，np.stack会扩展维度，也就是把里面的三个[h, w]的数组在扩展的维度上进行堆叠
+    #! 疑问: 该公式在y和z位置均乘-1，为什么？
+    #; 解答：这是因为NeRF使用的相机位姿都是OpenGL规定的相机坐标系，而这里的图像的坐标是OpenCV的相机坐标系，
+    #;      这两个坐标系之间的x轴相同，y/z轴方向相反，因此这里乘以-1就把OpenCV坐标系转成了OpenGL坐标系
+    # [h, w, 3]，np.stack会扩展维度，也就是把里面的三个[h, w]的数组在扩展的维度上进行堆叠
+    #; 注意：这里的dirs是相机光心到成像平面的方向向量，从相机系来看向量的终点的深度是一样的，都是相机焦距，
+    #;      但是向量的模长是不一样的，因为它们的Z轴深度一样但是方向不一样，而且都不是单位向量。
     dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)  
     
     # Step 3. 将ray方向从相机坐标系转到世界坐标系，并且使用逐元素乘法代替了矩阵乘法
     # Rotate ray directions from camera frame to the world frame
     # #[h,w,3]dot product, equals to: [c2w.dot(dir) for dir in dirs]
     #; dirs[..., np.newaxis, :]结果从(h, w, 3)变成(h, w, 1, 3)，dirs[..., np.newaxis, :] 
-    #;   * c2w[:3, :3]的维度为(h, w, 3, 3)，然后sum(xxx, -1)的结果为(h, w, 3)
-    # 注意：这里是使用逐元素乘法来实现矩阵乘法，因为如果是V_c转到V_w，那么应该进行矩阵乘法：c2w @ V_c
+    #     * c2w[:3, :3]的维度为(h, w, 3, 3)，然后sum(xxx, -1)的结果为(h, w, 3)
+    #; 注意：这里是使用逐元素乘法来实现矩阵乘法，因为如果是V_c转到V_w，那么应该进行矩阵乘法：c2w @ V_c
     #    这里使用逐元素乘法，利用广播操作将(h,w,1,3)*(3,3)扩充成(h,w,3,3)*(h,w,3,3)，最后再
     #    sum(xxx, -1)，最终得到的结果和矩阵乘法一样
     rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3, :3], -1)  # [h, w, 3]，表示world系下每个光线的方向向量
@@ -296,6 +299,19 @@ def get_rays_np(H, W, K, c2w):
 
 
 def ndc_rays(H, W, focal, near, rays_o, rays_d):
+    """
+        把光线原点和光线方向从正常的OpenGL的坐标系转到NDC空间中表示
+    Args:
+        H (_type_): 图像高度
+        W (_type_): 图像宽度
+        focal (_type_): fx，相机横向焦距。实际上本代码中fx=fy，所以这里就是相机的焦距
+        near (_type_): 成像平面的近处距离
+        rays_o (_type_): 原始正常空间中的光线中心
+        rays_d (_type_): 原始正常空间中的光线方向，注意并不是单位向量
+
+    Returns:
+        _type_: _description_
+    """
     # Shift ray origins to near plane
     t = -(near + rays_o[..., 2]) / rays_d[..., 2]
     rays_o = rays_o + t[..., None] * rays_d
